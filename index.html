@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>OmniPOS v29 - Platinum</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --bg: #000; --surface: #1c1c1e; --accent: #32d74b; --text: #fff; 
+            --border: #38383a; --danger: #ff453a; --safe-bottom: env(safe-area-inset-bottom);
+        }
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; font-family: -apple-system, sans-serif; touch-action: manipulation; }
+        body { background: var(--bg); color: var(--text); margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; position: fixed; width: 100%; }
+        
+        /* Fixed Header */
+        .header { padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; background: var(--surface); border-bottom: 1px solid var(--border); }
+        
+        /* Navigation Bar */
+        .nav-bar { height: 75px; background: var(--surface); display: flex; justify-content: space-around; align-items: center; border-top: 1px solid var(--border); padding-bottom: var(--safe-bottom); position: fixed; bottom: 0; width: 100%; z-index: 1000; }
+        .nav-item { font-size: 10px; text-align: center; color: #8e8e93; flex: 1; padding: 10px; }
+        .nav-item.active { color: var(--accent); font-weight: bold; }
+        .nav-item i { font-size: 22px; display: block; margin-bottom: 2px; }
+
+        /* Views */
+        .view { display: none; flex: 1; overflow-y: auto; padding: 15px; padding-bottom: 160px; -webkit-overflow-scrolling: touch; }
+        .view.active { display: flex; flex-direction: column; }
+
+        /* POS Grid & Image Styling */
+        .p-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .p-card { background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); position: relative; height: 135px; }
+        .p-card img { width: 100%; height: 75px; object-fit: cover; background: #2c2c2e; display: block; }
+        .p-info { padding: 6px; font-size: 10px; text-align: center; line-height: 1.2; }
+        .p-stock { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,0.85); color: var(--accent); font-size: 9px; padding: 2px 5px; border-radius: 4px; font-weight: bold; z-index: 2; }
+
+        /* Drawer System */
+        .drawer { position: fixed; bottom: 75px; left: 0; right: 0; background: var(--surface); border-radius: 24px 24px 0 0; z-index: 900; transform: translateY(calc(100% - 65px)); transition: transform 0.4s cubic-bezier(0.1, 0.7, 0.1, 1); border-top: 2px solid var(--border); box-shadow: 0 -10px 30px rgba(0,0,0,0.5); }
+        .drawer.open { transform: translateY(0); }
+        .drawer-handle { height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 0 25px; font-weight: 900; }
+
+        /* Input Controls */
+        .input-box { background: #2c2c2e; border: 1px solid var(--border); color: #fff; width: 100%; padding: 14px; border-radius: 12px; margin-bottom: 12px; font-size: 16px; -webkit-appearance: none; }
+        .btn-main { background: var(--accent); color: #000; border: none; padding: 16px; border-radius: 14px; font-weight: 800; width: 100%; font-size: 16px; transition: opacity 0.2s; }
+        .btn-ghost { background: #2c2c2e; color: #fff; border: 1px solid var(--border); padding: 10px 14px; border-radius: 10px; font-size: 11px; font-weight: bold; }
+
+        /* Professional PDF Receipt (Hidden) */
+        #receipt-print { display: none; }
+        @media print {
+            body > *:not(#receipt-print) { display: none !important; }
+            #receipt-print { 
+                display: block !important; 
+                width: 100%; 
+                background: #fff; 
+                color: #000; 
+                padding: 20px; 
+                font-family: 'Courier New', Courier, monospace; 
+                font-size: 11pt; 
+            }
+            .r-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+            .r-table th { border-bottom: 2px solid #000; text-align: left; padding: 5px 0; }
+            .r-table td { padding: 8px 0; border-bottom: 1px solid #eee; }
+            .r-total-box { font-size: 18pt; font-weight: 900; border-top: 3px double #000; margin-top: 10px; padding-top: 10px; display: flex; justify-content: space-between; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2 id="brand-ui" style="margin:0; font-size: 20px; color: var(--accent);">OmniPOS</h2>
+    <button id="scan-on" class="btn-ghost">📷 CAMERA SCAN</button>
+</div>
+
+<div class="view active" id="view-pos">
+    <div class="p-grid" id="pos-grid"></div>
+</div>
+
+<div class="view" id="view-inv">
+    <div style="display:flex; flex-direction:column; gap:12px; margin-bottom: 15px;">
+        <button id="add-item-trigger" class="btn-main">+ NEW PRODUCT ENTRY</button>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <button id="inv-export" class="btn-ghost">📤 EXPORT CSV</button>
+            <button id="inv-import-btn" class="btn-ghost">📥 IMPORT CSV</button>
+            <input type="file" id="csv-input" style="display:none" accept=".csv">
+        </div>
+    </div>
+    <div style="overflow-x:auto; background:var(--surface); border-radius:14px; border: 1px solid var(--border);">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; min-width:500px;">
+            <thead style="background:#2c2c2e; color:var(--accent);">
+                <tr><th style="padding:15px;">IMAGE</th><th>PRODUCT NAME</th><th>PRICE</th><th>STOCK</th><th>X</th></tr>
+            </thead>
+            <tbody id="inv-table-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="view" id="view-logs">
+    <div style="overflow-x:auto; background:var(--surface); border-radius:14px;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px; min-width:450px;">
+            <thead style="background:#2c2c2e; color:var(--accent);">
+                <tr><th style="padding:15px;">REF ID</th><th>CUSTOMER</th><th>TOTAL</th><th>ACTION</th></tr>
+            </thead>
+            <tbody id="logs-table-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="view" id="view-cfg">
+    <h3 style="color:var(--accent); margin-top:0;">Receipt Branding</h3>
+    <input type="text" id="cfg-biz-name" placeholder="Business Name" class="input-box">
+    <input type="text" id="cfg-biz-sub" placeholder="Business Sub-Header (TIN/Address)" class="input-box">
+    <input type="text" id="cfg-biz-foot" placeholder="Footnote (No Return Policy)" class="input-box">
+    <button id="cfg-save-btn" class="btn-main">SAVE BRANDING</button>
+</div>
+
+<div class="drawer" id="cart-drawer">
+    <div class="drawer-handle" id="drawer-toggle">
+        <span>🛒 CART (<span id="cart-qty-disp">0</span>)</span>
+        <span id="cart-total-disp" style="color:var(--accent); font-size: 22px;">₱0.00</span>
+    </div>
+    <div style="padding:20px; height: 380px; display: flex; flex-direction: column;">
+        <div id="edit-tag" style="display:none; color:var(--danger); font-size:11px; font-weight:900; margin-bottom:5px;">RE-EDITING TRANSACTION</div>
+        <input type="text" id="cust-input" placeholder="Enter Customer Name" class="input-box">
+        <div id="cart-items-container" style="flex:1; overflow-y:auto; margin-bottom:15px;"></div>
+        <button id="process-checkout" class="btn-main">COMPLETE & PRINT PDF</button>
+        <button id="clear-cart-btn" style="color:var(--danger); border:none; background:none; padding:15px; width:100%; font-weight:bold;">VOID SESSION</button>
+    </div>
+</div>
+
+<div class="nav-bar">
+    <div class="nav-item active" id="nav-pos"><i>🛒</i>POS</div>
+    <div class="nav-item" id="nav-inv"><i>📊</i>STOCK</div>
+    <div class="nav-item" id="nav-logs"><i>📜</i>LOGS</div>
+    <div class="nav-item" id="nav-cfg"><i>⚙️</i>SET</div>
+</div>
+
+<div id="item-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.95); z-index:3000; display:none; align-items:center; justify-content:center; padding:25px;">
+    <div style="background:var(--surface); width:100%; border-radius:24px; padding:25px; border: 1px solid var(--border);">
+        <h3 style="margin-top:0; color:var(--accent);">Product Setup</h3>
+        <input type="text" id="m-name" placeholder="Item Name" class="input-box">
+        <input type="number" id="m-price" placeholder="Price (₱)" class="input-box">
+        <input type="number" id="m-stock" placeholder="Initial Stock" class="input-box">
+        <input type="text" id="m-code" placeholder="Barcode / SKU" class="input-box">
+        <label style="font-size:11px; color:var(--accent); display:block; margin-bottom:5px;">UPLOAD PHOTO</label>
+        <input type="file" id="m-img-file" accept="image/*" class="input-box" style="font-size:12px;">
+        <button id="m-save-btn" class="btn-main">SAVE TO INVENTORY</button>
+        <button id="m-close-btn" style="background:none; border:none; color:var(--danger); width:100%; padding:15px; font-weight:bold;">DISCARD</button>
+    </div>
+</div>
+
+<div id="scanner-view" style="position:fixed; inset:0; background:#000; z-index:4000; display:none; flex-direction:column;">
+    <div id="qr-reader" style="flex:1;"></div>
+    <div style="height:100px; display:flex; align-items:center; justify-content:center; background:var(--surface); padding-bottom:var(--safe-bottom);">
+        <button id="scan-off" class="btn-main" style="width:200px; background:var(--danger); color:#fff;">STOP CAMERA</button>
+    </div>
+</div>
+
+<div id="receipt-print">
+    <div style="text-align:center;">
+        <h2 id="p-biz-name" style="margin:0; font-size:22pt;"></h2>
+        <p id="p-biz-sub" style="margin:5px 0;"></p>
+        <p>====================================</p>
+    </div>
+    <div style="display:flex; justify-content:space-between; margin-top:10px;">
+        <span><strong>REF:</strong> #<span id="p-ref-id"></span></span>
+        <span id="p-date-time"></span>
+    </div>
+    <div style="margin:8px 0;"><strong>CUSTOMER:</strong> <span id="p-cust-name"></span></div>
+    
+    <table class="r-table">
+        <thead>
+            <tr><th>QTY</th><th>ITEM DESCRIPTION</th><th style="text-align:right;">TOTAL</th></tr>
+        </thead>
+        <tbody id="p-items-list"></tbody>
+    </table>
+
+    <div class="r-total-box">
+        <span>GRAND TOTAL</span>
+        <span id="p-grand-total"></span>
+    </div>
+
+    <div style="text-align:center; margin-top:40px;">
+        <p id="p-biz-foot" style="font-style:italic; font-size:10pt;"></p>
+        <p style="font-size:9pt; margin-top:20px;">Receipt generated via OmniPOS Apex</p>
+    </div>
+</div>
+
+<script>
+    let inventory = JSON.parse(localStorage.getItem('apex29_inv')) || [];
+    let logs = JSON.parse(localStorage.getItem('apex29_logs')) || [];
+    let config = JSON.parse(localStorage.getItem('apex29_cfg')) || { name: "MY BUSINESS", sub: "TIN: 000-000-000-000", foot: "Thank you for your purchase!", ref: 1001 };
+    let cart = [];
+    let activeScanner = null;
+    let editRefId = null;
+
+    // iPhone Pointer Event Bridge (100% Working Touch)
+    function tap(id, fn) {
+        const el = typeof id === 'string' ? document.getElementById(id) : id;
+        if(el) {
+            el.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                fn(e);
+            });
+        }
+    }
+
+    // View Switcher
+    function showView(name) {
+        document.querySelectorAll('.view, .nav-item').forEach(el => el.classList.remove('active'));
+        document.getElementById('view-' + name).classList.add('active');
+        document.getElementById('nav-' + name).classList.add('active');
+        if(name === 'inv') renderInventory();
+        if(name === 'logs') renderLogs();
+    }
+
+    function sync() {
+        localStorage.setItem('apex29_inv', JSON.stringify(inventory));
+        localStorage.setItem('apex29_logs', JSON.stringify(logs));
+        localStorage.setItem('apex29_cfg', JSON.stringify(config));
+        renderPOSGrid();
+    }
+
+    // POS Grid Renderer (Includes Images)
+    function renderPOSGrid() {
+        const grid = document.getElementById('pos-grid');
+        grid.innerHTML = inventory.map((item, idx) => `
+            <div class="p-card" data-idx="${idx}">
+                <div class="p-stock">${item.stock}</div>
+                <img src="${item.img || 'https://via.placeholder.com/150?text=NO+IMAGE'}">
+                <div class="p-info"><strong>${item.name}</strong><br>₱${parseFloat(item.price).toFixed(2)}</div>
+            </div>
+        `).join('');
+
+        document.querySelectorAll('.p-card').forEach(card => {
+            tap(card, () => {
+                const item = inventory[card.dataset.idx];
+                if(item.stock <= 0) return alert("Out of Stock!");
+                const exist = cart.find(x => x.code === item.code);
+                if(exist) exist.qty++; else cart.push({...item, qty:1});
+                updateCartUI();
+                if(navigator.vibrate) navigator.vibrate(60);
+            });
+        });
+        document.getElementById('brand-ui').innerText = config.name;
+    }
+
+    function updateCartUI() {
+        let total = 0; let qty = 0;
+        document.getElementById('cart-items-container').innerHTML = cart.map((item, idx) => {
+            let rowTotal = item.price * item.qty;
+            total += rowTotal; qty += item.qty;
+            return `<div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border);">
+                <div><strong>${item.name}</strong><br>₱${item.price} x ${item.qty}</div>
+                <div class="c-remove" data-idx="${idx}" style="color:var(--danger); font-weight:900; padding:10px;">REMOVE</div>
+            </div>`;
+        }).join('');
+
+        document.querySelectorAll('.c-remove').forEach(btn => {
+            tap(btn, () => { cart.splice(btn.dataset.idx, 1); updateCartUI(); });
+        });
+
+        document.getElementById('cart-total-disp').innerText = "₱" + total.toLocaleString(undefined, {minimumFractionDigits:2});
+        document.getElementById('cart-qty-disp').innerText = qty;
+        document.getElementById('edit-tag').style.display = editRefId ? 'block' : 'none';
+    }
+
+    // Inventory Table
+    function renderInventory() {
+        document.getElementById('inv-table-body').innerHTML = inventory.map((i, idx) => `
+            <tr>
+                <td style="padding:10px;"><img src="${i.img || ''}" style="width:40px; height:40px; border-radius:8px; object-fit:cover;"></td>
+                <td><input class="input-box" style="margin:0; font-size:11px;" value="${i.name}" oninput="inventory[${idx}].name=this.value; sync();"></td>
+                <td><input class="input-box" style="margin:0; font-size:11px;" type="number" value="${i.price}" oninput="inventory[${idx}].price=parseFloat(this.value); sync();"></td>
+                <td><input class="input-box" style="margin:0; font-size:11px;" type="number" value="${i.stock}" oninput="inventory[${idx}].stock=parseInt(this.value); sync();"></td>
+                <td><button class="i-del" data-idx="${idx}" style="color:red; background:none; border:none; font-weight:bold;">DEL</button></td>
+            </tr>
+        `).join('');
+        document.querySelectorAll('.i-del').forEach(btn => tap(btn, () => {
+            if(confirm("Permanently delete item?")) { inventory.splice(btn.dataset.idx, 1); sync(); renderInventory(); }
+        }));
+    }
+
+    // Sales Logs
+    function renderLogs() {
+        document.getElementById('logs-table-body').innerHTML = logs.map((log, idx) => `
+            <tr>
+                <td style="padding:15px;">#${log.id}</td><td>${log.customer}</td><td>${log.total}</td>
+                <td><button class="log-edit-btn btn-ghost" data-idx="${idx}">RE-EDIT</button></td>
+            </tr>
+        `).join('');
+        document.querySelectorAll('.log-edit-btn').forEach(btn => tap(btn, () => {
+            const sale = logs[btn.dataset.idx];
+            cart = [...sale.items]; editRefId = sale.id;
+            document.getElementById('cust-input').value = sale.customer;
+            updateCartUI(); showView('pos'); document.getElementById('cart-drawer').classList.add('open');
+        }));
+    }
+
+    // Checkout & PDF Generation
+    tap('process-checkout', () => {
+        if(cart.length === 0) return alert("Cart is empty");
+        
+        // Stock Deduction
+        cart.forEach(cItem => {
+            const iItem = inventory.find(x => x.code === cItem.code);
+            if(iItem) iItem.stock -= cItem.qty;
+        });
+
+        const totalValue = document.getElementById('cart-total-disp').innerText;
+        const refNum = editRefId || config.ref++;
+        const dateStr = new Date().toLocaleString();
+        const customer = document.getElementById('cust-input').value || "Valued Customer";
+        
+        const finalSale = { id: refNum, customer, total: totalValue, date: dateStr, items: [...cart] };
+
+        if(editRefId) {
+            const logIdx = logs.findIndex(l => l.id === editRefId);
+            logs[logIdx] = finalSale;
+        } else {
+            logs.unshift(finalSale);
+        }
+
+        // Setup Print Canvas
+        document.getElementById('p-biz-name').innerText = config.name;
+        document.getElementById('p-biz-sub').innerText = config.sub;
+        document.getElementById('p-biz-foot').innerText = config.foot;
+        document.getElementById('p-ref-id').innerText = refNum;
+        document.getElementById('p-date-time').innerText = dateStr;
+        document.getElementById('p-cust-name').innerText = customer;
+        document.getElementById('p-grand-total').innerText = totalValue;
+        document.getElementById('p-items-list').innerHTML = cart.map(i => `
+            <tr>
+                <td style="width:50px;">${i.qty}x</td>
+                <td>${i.name}</td>
+                <td style="text-align:right;">₱${(i.qty * i.price).toFixed(2)}</td>
+            </tr>
+        `).join('');
+
+        sync();
+        setTimeout(() => { window.print(); }, 350);
+
+        // Reset
+        cart = []; editRefId = null; document.getElementById('cust-input').value = "";
+        updateCartUI(); document.getElementById('cart-drawer').classList.remove('open');
+    });
+
+    // CSV Logic
+    tap('inv-export', () => {
+        let csv = "Name,Price,Stock,Code\n" + inventory.map(i => `"${i.name}",${i.price},${i.stock},"${i.code}"`).join("\n");
+        const blob = new Blob([csv], {type: 'text/csv'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'Inventory_Master.csv'; a.click();
+    });
+
+    tap('inv-import-btn', () => document.getElementById('csv-input').click());
+    document.getElementById('csv-input').onchange = (e) => {
+        const reader = new FileReader();
+        reader.onload = (f) => {
+            const rows = f.target.result.split('\n').slice(1);
+            rows.forEach(r => {
+                const c = r.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                if(c.length < 4) return;
+                const name = c[0].replace(/"/g,'').trim();
+                const price = parseFloat(c[1]);
+                const stock = parseInt(c[2]);
+                const code = c[3].replace(/"/g,'').trim();
+                const existingIdx = inventory.findIndex(i => i.code === code);
+                if(existingIdx > -1) {
+                    inventory[existingIdx].name = name;
+                    inventory[existingIdx].price = price;
+                    inventory[existingIdx].stock = stock;
+                } else if(name) {
+                    inventory.push({name, price, stock, code, img:''});
+                }
+            });
+            sync(); renderInventory(); alert("Sync Complete!");
+        };
+        reader.readAsText(e.target.files[0]);
+    };
+
+    // Modal Image Capture & Save
+    tap('m-save-btn', () => {
+        const file = document.getElementById('m-img-file').files[0];
+        const newItem = {
+            name: document.getElementById('m-name').value,
+            price: parseFloat(document.getElementById('m-price').value) || 0,
+            stock: parseInt(document.getElementById('m-stock').value) || 0,
+            code: document.getElementById('m-code').value || Date.now().toString(),
+            img: ''
+        };
+
+        if(file) {
+            const r = new FileReader();
+            r.onload = (e) => {
+                newItem.img = e.target.result;
+                inventory.push(newItem); sync();
+                document.getElementById('item-modal').style.display='none';
+            };
+            r.readAsDataURL(file);
+        } else {
+            inventory.push(newItem); sync();
+            document.getElementById('item-modal').style.display='none';
+        }
+    });
+
+    // Barcode Scanner Engine
+    async function toggleScanner(status) {
+        const view = document.getElementById('scanner-view');
+        if(status) {
+            view.style.display = 'flex';
+            if(!activeScanner) activeScanner = new Html5Qrcode("qr-reader");
+            try {
+                await activeScanner.start({facingMode:"environment"}, {fps:20, qrbox:250}, (code) => {
+                    const found = inventory.find(i => i.code === code);
+                    if(found && found.stock > 0) {
+                        const ex = cart.find(x => x.code === found.code);
+                        if(ex) ex.qty++; else cart.push({...found, qty:1});
+                        updateCartUI();
+                        if(navigator.vibrate) navigator.vibrate(80);
+                    }
+                });
+            } catch(err) { alert("Camera Error"); toggleScanner(false); }
+        } else {
+            if(activeScanner) activeScanner.stop().then(() => view.style.display='none');
+        }
+    }
+
+    // Main Event Listeners
+    tap('nav-pos', () => showView('pos'));
+    tap('nav-inv', () => showView('inv'));
+    tap('nav-logs', () => showView('logs'));
+    tap('nav-cfg', () => showView('cfg'));
+    tap('drawer-toggle', () => document.getElementById('cart-drawer').classList.toggle('open'));
+    tap('scan-on', () => toggleScanner(true));
+    tap('scan-off', () => toggleScanner(false));
+    tap('add-item-trigger', () => document.getElementById('item-modal').style.display='flex');
+    tap('m-close-btn', () => document.getElementById('item-modal').style.display='none');
+    tap('clear-cart-btn', () => { cart = []; editRefId = null; updateCartUI(); });
+    tap('cfg-save-btn', () => {
+        config.name = document.getElementById('cfg-biz-name').value;
+        config.sub = document.getElementById('cfg-biz-sub').value;
+        config.foot = document.getElementById('cfg-biz-foot').value;
+        sync(); alert("Branding Applied!");
+    });
+
+    window.onload = () => {
+        renderPOSGrid();
+        document.getElementById('cfg-biz-name').value = config.name;
+        document.getElementById('cfg-biz-sub').value = config.sub;
+        document.getElementById('cfg-biz-foot').value = config.foot;
+    };
+</script>
+</body>
+</html>
